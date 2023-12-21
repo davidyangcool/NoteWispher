@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>录音界面</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuidv4.min.js"></script>
+
+</head>
+
+<body>
+
+    <button id="startRecord">开始录音</button>
+    <button id="stopRecord" disabled>停止录音</button>
+    <audio id="audio" controls></audio>
+    <p id="transcription"></p>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+
+        document.getElementById("startRecord").onclick = function () {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    mediaRecorder.onstop = async () => {
+                        let blob = new Blob(audioChunks, { type: 'audio/wav' });
+
+                        let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        let source = audioContext.createBufferSource();
+                        const audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
+
+                        const leftChannel = audioBuffer.getChannelData(0);
+                        const samples = leftChannel.length;
+                        const data = new Int16Array(samples);
+
+                        for (let i = 0; i < samples; i++) {
+                            data[i] = leftChannel[i] * (Math.pow(2, 15) - 1);
+                        }
+
+                        const mp3encoder = new lamejs.Mp3Encoder(1, audioBuffer.sampleRate, 128);
+                        const mp3Data = mp3encoder.encodeBuffer(data);
+                        const mp3Blob = new Blob([new Uint8Array(mp3Data)], { type: 'audio/mp3' });
+
+                        // Upload the MP3 blob to server
+                        let formData = new FormData();
+                        const uuidName = uuidv4() + ".mp3";  // <-- This line was changed
+                        formData.append("file", mp3Blob, uuidName);
+
+                        fetch("/upload", {
+                            method: "POST",
+                            body: formData
+                        })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.text) {
+                                    document.getElementById("transcription").textContent = "转录结果: " + data.text;
+                                } else if (data.error) {
+                                    console.error("Error:", data.error);
+                                }
+                            })
+                            .catch(error => {
+                                console.error("Error uploading file:", error);
+                            });
+
+                    };
+                    mediaRecorder.start();
+                });
+            this.disabled = true;
+            document.getElementById("stopRecord").disabled = false;
+        }
+
+        document.getElementById("stopRecord").onclick = function () {
+            mediaRecorder.stop();
+            this.disabled = true;
+            document.getElementById("startRecord").disabled = false;
+        }
+    </script>
+
+</body>
+
+</html>

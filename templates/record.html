@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuidv4.min.js"></script>
+    <style>
+        @keyframes blinker {
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        #recordButton.blinking {
+            animation: blinker 1s linear infinite;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            gap: 20px;
+            /* spacing between elements */
+        }
+
+        #recordButton {
+            font-size: 4rem;
+            /* Increase the size of the button and its icon */
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+            outline: none;
+            padding: 20px;
+            /* Additional padding to make the button bigger */
+            box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.2);
+            /* Shadow effect */
+        }
+
+        #recordButton i {
+            font-size: 4rem;
+            /* Size of the microphone icon */
+        }
+
+
+        #copyButton {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+<audio id="audio" controls></audio>
+<button id="recordButton"><i class="fas fa-microphone"></i></button>
+<label for="transcription"></label><textarea id="transcription" rows="10" cols="50"></textarea>
+<div>
+    <button id="copyButton" onclick="copyToClipboard()">Copy Content</button>
+    <button id="clearButton" onclick="clearTranscription()">Clear</button>
+</div>
+
+<script>
+
+    let mediaRecorder;
+    let allAudioChunks = [];
+    let audioChunks = [];
+    let isRecording = false;
+
+    document.getElementById("recordButton").onclick = function () {
+        if (isRecording) {
+            // 停止录音
+            mediaRecorder.stop();
+            this.classList.remove("blinking");
+            isRecording = false;
+
+        } else {
+            // 开始录音
+            navigator.mediaDevices.getUserMedia({audio: true})
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];  // 清空之前的数据
+                    mediaRecorder.ondataavailable = async event => {
+                        audioChunks.push(event.data);
+                        allAudioChunks.push(event.data); // 添加这一行
+
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        playAllAudioChunks();
+                        if (audioChunks.length > 0) {
+                            // 如果还有剩余的音频块，将其处理并上传
+                            const mp3Blob = await processAudio(audioChunks);
+                            uploadAudio(mp3Blob);
+                        }
+
+                    };
+
+                    mediaRecorder.start();
+                    isRecording = true;
+                    document.getElementById("recordButton").classList.add("blinking");
+                }).catch(err => {
+                console.error("Error accessing microphone:", err);
+            });
+        }
+    };
+
+    async function processAudio(audioData) {
+        let blob = new Blob(audioData, {type: 'audio/wav'});
+        let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
+        const leftChannel = audioBuffer.getChannelData(0);
+        const samples = leftChannel.length;
+        const data = new Int16Array(samples);
+
+        for (let i = 0; i < samples; i++) {
+            data[i] = leftChannel[i] * (Math.pow(2, 15) - 1);
+        }
+
+        const mp3encoder = new lamejs.Mp3Encoder(1, audioBuffer.sampleRate, 128);
+        const mp3Data = mp3encoder.encodeBuffer(data);
+        return new Blob([new Uint8Array(mp3Data)], {type: 'audio/mp3'});
+    }
+
+    function uploadAudio(mp3Blob) {
+        // 上传MP3 blob到服务器
+        let formData = new FormData();
+        const uuidName = uuidv4() + ".mp3";
+        formData.append("file", mp3Blob, uuidName);
+
+        fetch("/upload", {
+            method: "POST",
+            body: formData
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.text) {
+                    const textarea = document.getElementById("transcription");
+                    if (textarea.value) {
+                        textarea.value += "\n" + data.text;  // 追加新的转录
+                    } else {
+                        textarea.value = data.text;
+                    }
+                } else if (data.error) {
+                    console.error("Error:", data.error);
+                }
+            })
+            .catch(error => {
+                console.error("Error uploading file:", error);
+            });
+    }
+
+    function copyToClipboard() {
+        const textarea = document.getElementById("transcription");
+        textarea.select();
+        document.execCommand("copy");
+        alert("Transcription copied");
+    }
+
+    function clearTranscription() {
+        document.getElementById("transcription").value = "";
+    }
+
+   function playAllAudioChunks() {
+    let combinedBlob = new Blob(allAudioChunks, {type: 'audio/webm;codecs=opus'});
+    const audioURL = URL.createObjectURL(combinedBlob);
+    document.getElementById("audio").src = audioURL;
+   }
+
+
+</script>
+
+</body>
+
+</html>
